@@ -28,7 +28,7 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin) return callback(null, true);
+      if (!origin) return callback(null, true); // Postman, curl etc.
       if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error("CORS blocked: " + origin));
     },
@@ -64,8 +64,7 @@ app.post("/admin/login", (req, res) => {
     const token = jwt.sign({ username }, process.env.JWT_SECRET, {
       expiresIn: "12h",
     });
-
-    return res.json({ success: true, token, name: "Anuj" });
+    return res.json({ success: true, token, name: "Admin" });
   }
 
   return res
@@ -94,11 +93,9 @@ function getUsersFromExcel(type) {
   data.forEach((row) => {
     if (type === "All" || type === "Contractors")
       if (row["Contractors"]) numbers.push(row["Contractors"]);
-
     if (type === "All" || type === "Individual Customers")
       if (row["Individual Customers"])
         numbers.push(row["Individual Customers"]);
-
     if (type === "All" || type === "Retailers")
       if (row["Retailers"]) numbers.push(row["Retailers"]);
   });
@@ -229,7 +226,7 @@ app.post(
   },
 );
 
-/* ===== CONTROL (PROTECTED) ===== */
+/* ===== CONTROL ENDPOINTS (PROTECTED) ===== */
 app.post("/broadcast/pause", authMiddleware, (req, res) => {
   if (currentBroadcast) currentBroadcast.pause();
   res.json({ status: "paused" });
