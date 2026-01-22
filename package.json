@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "cors": "^2.8.5",
+    "express": "^5.2.1",
+    "multer": "^2.0.2",
+    "pino": "^10.2.1",
+    "qrcode-terminal": "^0.12.0",
+    "xlsx": "^0.18.5"
+  }
+}
