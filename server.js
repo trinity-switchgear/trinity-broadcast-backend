@@ -16,6 +16,12 @@ const {
 } = require("@whiskeysockets/baileys");
 
 const app = express();
+
+app.use((req, res, next) => {
+  res.setHeader("Content-Type", "application/json");
+  next();
+});
+
 app.use(express.json());
 app.use(express.static("public"));
 app.use("/uploads", express.static("uploads"));
@@ -35,7 +41,11 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "ngrok-skip-browser-warning",
+    ],
   }),
 );
 
