@@ -8,6 +8,7 @@ const Pino = require("pino");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const qrcode = require("qrcode-terminal");
+const rateLimit = require("express-rate-limit");
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -19,7 +20,7 @@ app.use(express.json());
 app.use(express.static("public"));
 app.use("/uploads", express.static("uploads"));
 
-/* ===== CORS ===== */
+/* ====== CORS ====== */
 const allowedOrigins = [
   "http://localhost:3000",
   "https://trinityswitchgear.vercel.app",
@@ -28,7 +29,7 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin) return callback(null, true); // Postman, curl etc.
+      if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error("CORS blocked: " + origin));
     },
@@ -38,7 +39,12 @@ app.use(
   }),
 );
 
-/* ===== JWT MIDDLEWARE ===== */
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Credentials", "true");
+  next();
+});
+
+/* ====== JWT AUTH MIDDLEWARE ====== */
 function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: "No token" });
@@ -48,13 +54,19 @@ function authMiddleware(req, res, next) {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
     next();
-  } catch (err) {
+  } catch {
     return res.status(403).json({ error: "Invalid token" });
   }
 }
 
-/* ===== ADMIN LOGIN ===== */
-app.post("/admin/login", (req, res) => {
+/* ====== RATE LIMIT LOGIN ====== */
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+});
+
+/* ====== ADMIN LOGIN ====== */
+app.post("/admin/login", loginLimiter, (req, res) => {
   const { username, password } = req.body;
 
   if (
@@ -72,17 +84,17 @@ app.post("/admin/login", (req, res) => {
     .json({ success: false, message: "Invalid credentials" });
 });
 
-/* ===== MULTER ===== */
+/* ====== MULTER ====== */
 const upload = multer({ dest: "uploads/" });
+
 let sock;
 let isConnected = false;
 
-/* ===== CLEAN NUMBER ===== */
+/* ====== READ EXCEL ====== */
 function cleanNumber(num) {
   return String(num).replace(/\D/g, "");
 }
 
-/* ===== READ EXCEL ===== */
 function getUsersFromExcel(type) {
   const workbook = XLSX.readFile("contacts.xlsx");
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -91,13 +103,17 @@ function getUsersFromExcel(type) {
   let numbers = [];
 
   data.forEach((row) => {
-    if (type === "All" || type === "Contractors")
-      if (row["Contractors"]) numbers.push(row["Contractors"]);
-    if (type === "All" || type === "Individual Customers")
-      if (row["Individual Customers"])
-        numbers.push(row["Individual Customers"]);
-    if (type === "All" || type === "Retailers")
-      if (row["Retailers"]) numbers.push(row["Retailers"]);
+    if ((type === "All" || type === "Contractors") && row["Contractors"])
+      numbers.push(row["Contractors"]);
+
+    if (
+      (type === "All" || type === "Individual Customers") &&
+      row["Individual Customers"]
+    )
+      numbers.push(row["Individual Customers"]);
+
+    if ((type === "All" || type === "Retailers") && row["Retailers"])
+      numbers.push(row["Retailers"]);
   });
 
   return numbers
@@ -106,13 +122,13 @@ function getUsersFromExcel(type) {
     .map((n) => `${n}@s.whatsapp.net`);
 }
 
-/* ===== COUNT API (PROTECTED) ===== */
+/* ====== COUNT (PROTECTED) ====== */
 app.get("/count", authMiddleware, (req, res) => {
   const users = getUsersFromExcel(req.query.target);
   res.json({ count: users.length });
 });
 
-/* ===== START WHATSAPP ===== */
+/* ====== START WHATSAPP BOT ====== */
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("./auth");
 
@@ -122,6 +138,7 @@ async function startBot() {
   });
 
   sock.ev.on("creds.update", saveCreds);
+
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect, qr } = update;
     if (qr) qrcode.generate(qr, { small: true });
@@ -132,17 +149,18 @@ async function startBot() {
     }
 
     if (connection === "close") {
+      isConnected = false;
       const shouldReconnect =
         lastDisconnect?.error?.output?.statusCode !==
         DisconnectReason.loggedOut;
-      isConnected = false;
       if (shouldReconnect) startBot();
     }
   });
 }
+
 startBot();
 
-/* ===== BROADCAST (PROTECTED) ===== */
+/* ====== BROADCAST (PROTECTED) ====== */
 let currentBroadcast = null;
 
 app.post(
@@ -193,11 +211,13 @@ app.post(
 
       try {
         if (message) await sock.sendMessage(jid, { text: message });
+
         if (image)
           await sock.sendMessage(jid, {
             image: fs.readFileSync(image.path),
             caption: imageCaption || "",
           });
+
         if (pdf)
           await sock.sendMessage(jid, {
             document: fs.readFileSync(pdf.path),
@@ -226,7 +246,7 @@ app.post(
   },
 );
 
-/* ===== CONTROL ENDPOINTS (PROTECTED) ===== */
+/* ====== CONTROL ENDPOINTS ====== */
 app.post("/broadcast/pause", authMiddleware, (req, res) => {
   if (currentBroadcast) currentBroadcast.pause();
   res.json({ status: "paused" });
@@ -242,7 +262,7 @@ app.post("/broadcast/stop", authMiddleware, (req, res) => {
   res.json({ status: "stopped" });
 });
 
-/* ===== PORT ===== */
+/* ====== START SERVER ====== */
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log("🌐 Backend running on port", PORT);
