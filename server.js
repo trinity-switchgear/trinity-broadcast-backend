@@ -6,6 +6,7 @@ const fs = require("fs");
 const XLSX = require("xlsx");
 const Pino = require("pino");
 const cors = require("cors");
+const jwt = require("jsonwebtoken");
 const qrcode = require("qrcode-terminal");
 const {
   default: makeWASocket,
@@ -37,7 +38,22 @@ app.use(
   }),
 );
 
-/* ===== ADMIN LOGIN API ===== */
+/* ===== JWT MIDDLEWARE ===== */
+function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: "No token" });
+
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(403).json({ error: "Invalid token" });
+  }
+}
+
+/* ===== ADMIN LOGIN ===== */
 app.post("/admin/login", (req, res) => {
   const { username, password } = req.body;
 
@@ -45,7 +61,11 @@ app.post("/admin/login", (req, res) => {
     username === process.env.ADMIN_USER &&
     password === process.env.ADMIN_PASS
   ) {
-    return res.json({ success: true, name: "Anuj" });
+    const token = jwt.sign({ username }, process.env.JWT_SECRET, {
+      expiresIn: "12h",
+    });
+
+    return res.json({ success: true, token, name: "Anuj" });
   }
 
   return res
@@ -89,8 +109,8 @@ function getUsersFromExcel(type) {
     .map((n) => `${n}@s.whatsapp.net`);
 }
 
-/* ===== COUNT API ===== */
-app.get("/count", (req, res) => {
+/* ===== COUNT API (PROTECTED) ===== */
+app.get("/count", authMiddleware, (req, res) => {
   const users = getUsersFromExcel(req.query.target);
   res.json({ count: users.length });
 });
@@ -125,11 +145,12 @@ async function startBot() {
 }
 startBot();
 
-/* ===== BROADCAST ===== */
+/* ===== BROADCAST (PROTECTED) ===== */
 let currentBroadcast = null;
 
 app.post(
   "/broadcast",
+  authMiddleware,
   upload.fields([
     { name: "image", maxCount: 1 },
     { name: "pdf", maxCount: 1 },
@@ -208,18 +229,18 @@ app.post(
   },
 );
 
-/* ===== CONTROL ===== */
-app.post("/broadcast/pause", (req, res) => {
+/* ===== CONTROL (PROTECTED) ===== */
+app.post("/broadcast/pause", authMiddleware, (req, res) => {
   if (currentBroadcast) currentBroadcast.pause();
   res.json({ status: "paused" });
 });
 
-app.post("/broadcast/resume", (req, res) => {
+app.post("/broadcast/resume", authMiddleware, (req, res) => {
   if (currentBroadcast) currentBroadcast.resume();
   res.json({ status: "resumed" });
 });
 
-app.post("/broadcast/stop", (req, res) => {
+app.post("/broadcast/stop", authMiddleware, (req, res) => {
   if (currentBroadcast) currentBroadcast.stop();
   res.json({ status: "stopped" });
 });
