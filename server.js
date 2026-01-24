@@ -17,6 +17,7 @@ const {
 } = require("@whiskeysockets/baileys");
 
 const app = express();
+app.set("trust proxy", true);
 
 // ====== MIDDLEWARES ======
 app.use(express.json());
@@ -68,10 +69,17 @@ function authMiddleware(req, res, next) {
   }
 }
 
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 800,
+});
+
+app.use(apiLimiter);
+
 // ====== LOGIN RATE LIMIT ======
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 50,
 });
 
 // ====== ADMIN LOGIN ======
