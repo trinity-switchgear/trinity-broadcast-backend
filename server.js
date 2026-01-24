@@ -346,7 +346,9 @@ async function startBot() {
     setTimeout(() => processedMessages.delete(msg.key.id), 60_000);
 
     const isPrivateChat =
-      jid.endsWith("@s.whatsapp.net") || jid.endsWith("@c.us")|| jid.endsWith("@lid");
+      jid.endsWith("@s.whatsapp.net") ||
+      jid.endsWith("@c.us") ||
+      jid.endsWith("@lid");
     const isAdmin = ADMINS.includes(jid);
 
     // Parse message text
@@ -374,18 +376,39 @@ async function startBot() {
 
     // ===== GREETING =====
     if (isPrivateChat && !msg.key.fromMe) {
-      const now = Date.now();
-      if (
-        !greetingTimestamps[jid] ||
-        now - greetingTimestamps[jid] >= GREETING_COOLDOWN
-      ) {
+      const text =
+        msg.message?.conversation ||
+        msg.message?.extendedTextMessage?.text ||
+        msg.message?.imageMessage?.caption ||
+        msg.message?.documentMessage?.caption ||
+        "";
+
+      const message = text.toLowerCase().trim();
+
+      // Skip greeting if user sent a menu starter message
+      const menuStarters = ["hi", "hii", "hiii", "hello", "menu", "start"];
+      if (menuStarters.includes(message)) {
+        // User will go directly to menu, so don't send greeting
+        const now = Date.now();
         greetingTimestamps[jid] = now;
         fs.writeFileSync(
           GREET_FILE,
           JSON.stringify(greetingTimestamps, null, 2),
         );
-        await sock.sendMessage(jid, {
-          text: `Hello 👋 
+      } else {
+        const now = Date.now();
+        if (
+          !greetingTimestamps[jid] ||
+          now - greetingTimestamps[jid] >= GREETING_COOLDOWN
+        ) {
+          greetingTimestamps[jid] = now;
+          fs.writeFileSync(
+            GREET_FILE,
+            JSON.stringify(greetingTimestamps, null, 2),
+          );
+
+          await sock.sendMessage(jid, {
+            text: `Hello 👋 
 Welcome to *Trinity Electric Syndicate* ⚡
 📍 Mumbai
 
@@ -395,7 +418,8 @@ We are suppliers of:
 🔷 Panels & Electrical Accessories
 
 Type *MENU / START / HI* to see options.`,
-        });
+          });
+        }
       }
     }
 
