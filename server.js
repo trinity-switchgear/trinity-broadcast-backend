@@ -100,7 +100,20 @@ if (!fs.existsSync(BACKUP_DIR)) {
 function backupExcelFile() {
   if (!fs.existsSync(EXCEL_FILE)) return;
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const now = new Date();
+  const ist = now.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
+  const timestamp = ist.replace(/[\/,:\s]/g, "-");
+
   const backupPath = path.join(BACKUP_DIR, `contacts_backup_${timestamp}.xlsx`);
 
   fs.copyFile(EXCEL_FILE, backupPath, (err) => {
@@ -306,22 +319,19 @@ app.post("/admin/backup-now", authMiddleware, (req, res) => {
     res.status(500).json({ success: false, error: e.message });
   }
 });
-
-// ====== RESTORE BACKUP API (SUPER ADMIN ONLY) ======
+// ====== RESTORE BACKUP API (ADMIN ONLY via JWT) ======
 app.post("/admin/restore", authMiddleware, (req, res) => {
   const { fileName } = req.body;
 
-  if (!fileName) return res.status(400).json({ error: "fileName is required" });
-
-  // 🔒 Only super admin allowed
-  if (!SUPER_ADMINS.includes(req.user.username)) {
-    return res.status(403).json({ error: "Not allowed to restore backups" });
+  if (!fileName) {
+    return res.status(400).json({ error: "fileName is required" });
   }
 
   const backupPath = path.join(BACKUP_DIR, fileName);
 
-  if (!fs.existsSync(backupPath))
+  if (!fs.existsSync(backupPath)) {
     return res.status(404).json({ error: "Backup file not found" });
+  }
 
   try {
     fs.copyFileSync(backupPath, EXCEL_FILE);
@@ -349,20 +359,33 @@ const SUPER_ADMINS = ["918652859663@s.whatsapp.net"]; // 👈 only these can res
 
 // ====== LIST BACKUPS API ======
 app.get("/admin/list-backups", authMiddleware, (req, res) => {
-  try {
-    if (!fs.existsSync(BACKUP_DIR)) return res.json({ backups: [] });
+  if (!fs.existsSync(BACKUP_DIR)) return res.json({ backups: [] });
 
-    const files = fs
-      .readdirSync(BACKUP_DIR)
-      .map((file) => ({
-        name: file,
-        time: fs.statSync(path.join(BACKUP_DIR, file)).mtimeMs,
-      }))
-      .sort((a, b) => b.time - a.time);
-    res.json({ backups: files.map((f) => f.name) });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  const files = fs
+    .readdirSync(BACKUP_DIR)
+    .filter((f) => f.endsWith(".xlsx"))
+    .map((file) => {
+      // Extract: 29-01-2026--14-51-51
+      const match = file.match(
+        /contacts_backup_(\d{2}-\d{2}-\d{4})--(\d{2}-\d{2}-\d{2})/,
+      );
+
+      let time = 0;
+      if (match) {
+        const [_, datePart, timePart] = match;
+        const [dd, mm, yyyy] = datePart.split("-");
+        const [hh, mi, ss] = timePart.split("-");
+
+        // Create real Date object
+        time = new Date(`${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`).getTime();
+      }
+
+      return { name: file, time };
+    })
+    // 🔥 Newest first
+    .sort((a, b) => b.time - a.time);
+
+  res.json({ backups: files.map((f) => f.name) });
 });
 
 const GREETING_COOLDOWN = 8 * 60 * 60 * 1000;
