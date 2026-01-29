@@ -23,16 +23,17 @@ app.set("trust proxy", 1);
 app.use(express.json());
 app.use(express.static("public"));
 app.use("/uploads", express.static("uploads"));
-app.use((req, res, next) => {
-  res.setHeader("Content-Type", "application/json");
-  next();
-});
+// app.use((req, res, next) => {
+//   res.setHeader("Content-Type", "application/json");
+//   next();
+// });
 
 // ====== CORS ======
 const allowedOrigins = [
   "http://localhost:3000",
   "https://trinityswitchgear.vercel.app",
 ];
+
 app.use(
   cors({
     origin: function (origin, callback) {
@@ -49,10 +50,8 @@ app.use(
     ],
   }),
 );
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Credentials", "true");
-  next();
-});
+
+app.options(/.*/, cors()); // ✅ works with your router version
 
 // ====== JWT AUTH ======
 function authMiddleware(req, res, next) {
@@ -89,6 +88,62 @@ app.post("/admin/login", (req, res) => {
     .json({ success: false, message: "Invalid credentials" });
 });
 
+// ====== EXCEL AUTO BACKUP SYSTEM ======
+const EXCEL_FILE = path.join(__dirname, "contacts.xlsx");
+const BACKUP_DIR = path.join(__dirname, "excel_backups");
+const MAX_BACKUP_FILES = 30; // 🔢 keep only last 30 backups
+
+if (!fs.existsSync(BACKUP_DIR)) {
+  fs.mkdirSync(BACKUP_DIR);
+}
+
+function backupExcelFile() {
+  if (!fs.existsSync(EXCEL_FILE)) return;
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupPath = path.join(BACKUP_DIR, `contacts_backup_${timestamp}.xlsx`);
+
+  fs.copyFile(EXCEL_FILE, backupPath, (err) => {
+    if (err) {
+      console.error("❌ Excel Backup Failed:", err);
+    } else {
+      console.log("✅ Excel Auto Backup Created:", backupPath);
+
+      // 🧹 Cleanup after every backup
+      cleanupOldBackupsByCount();
+    }
+  });
+}
+
+// ====== CLEANUP OLD BACKUPS (BY COUNT) ======
+function cleanupOldBackupsByCount() {
+  if (!fs.existsSync(BACKUP_DIR)) return;
+
+  const files = fs
+    .readdirSync(BACKUP_DIR)
+    .map((file) => ({
+      name: file,
+      time: fs.statSync(path.join(BACKUP_DIR, file)).mtimeMs,
+    }))
+    .sort((a, b) => b.time - a.time); // newest first
+
+  console.log("🧹 Cleanup running. Total backups:", files.length);
+
+  const toDelete = files.slice(MAX_BACKUP_FILES);
+
+  toDelete.forEach((file) => {
+    const filePath = path.join(BACKUP_DIR, file.name);
+    fs.unlinkSync(filePath);
+    console.log("🗑️ Deleted old backup:", file.name);
+  });
+}
+
+// 🧹 Run cleanup once at startup
+cleanupOldBackupsByCount();
+
+// ⏱ Auto backup every 30 minutes
+setInterval(backupExcelFile, 30 * 60 * 1000);
+
 // ====== MULTER ======
 const upload = multer({ dest: "uploads/" });
 
@@ -107,7 +162,6 @@ function getAllExcelRows() {
   // defval:"" prevents undefined → sparse rows
   return XLSX.utils.sheet_to_json(sheet, { defval: "" });
 }
-
 function saveExcelRows(rows) {
   const columns = [
     "WhatsApp JID",
@@ -129,7 +183,11 @@ function saveExcelRows(rows) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
   XLSX.writeFile(wb, "contacts.xlsx");
+
+  // 🔁 BACKUP AFTER EVERY SAVE
+  backupExcelFile();
 }
+
 function addJidToExcel(jid) {
   const rows = getAllExcelRows();
   const cleanJid = String(jid).trim();
@@ -239,6 +297,40 @@ function getCountFromExcel(column) {
     .length;
 }
 
+// ====== MANUAL BACKUP API ======
+app.post("/admin/backup-now", authMiddleware, (req, res) => {
+  try {
+    backupExcelFile();
+    res.json({ success: true, message: "Backup created successfully" });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ====== RESTORE BACKUP API (SUPER ADMIN ONLY) ======
+app.post("/admin/restore", authMiddleware, (req, res) => {
+  const { fileName } = req.body;
+
+  if (!fileName) return res.status(400).json({ error: "fileName is required" });
+
+  // 🔒 Only super admin allowed
+  if (!SUPER_ADMINS.includes(req.user.username)) {
+    return res.status(403).json({ error: "Not allowed to restore backups" });
+  }
+
+  const backupPath = path.join(BACKUP_DIR, fileName);
+
+  if (!fs.existsSync(backupPath))
+    return res.status(404).json({ error: "Backup file not found" });
+
+  try {
+    fs.copyFileSync(backupPath, EXCEL_FILE);
+    res.json({ success: true, message: "Excel restored from backup" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ====== COUNT ======
 app.get("/count", authMiddleware, (req, res) => {
   const count = getCountFromExcel(req.query.target);
@@ -251,7 +343,28 @@ let sock;
 let isConnected = false;
 
 const GREET_FILE = "./greetings.json";
+// 🔐 ADMIN CONFIG
 const ADMINS = ["918652859663@s.whatsapp.net"];
+const SUPER_ADMINS = ["918652859663@s.whatsapp.net"]; // 👈 only these can restore
+
+// ====== LIST BACKUPS API ======
+app.get("/admin/list-backups", authMiddleware, (req, res) => {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) return res.json({ backups: [] });
+
+    const files = fs
+      .readdirSync(BACKUP_DIR)
+      .map((file) => ({
+        name: file,
+        time: fs.statSync(path.join(BACKUP_DIR, file)).mtimeMs,
+      }))
+      .sort((a, b) => b.time - a.time);
+    res.json({ backups: files.map((f) => f.name) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 const GREETING_COOLDOWN = 8 * 60 * 60 * 1000;
 
 let greetingTimestamps = fs.existsSync(GREET_FILE)
@@ -260,7 +373,6 @@ let greetingTimestamps = fs.existsSync(GREET_FILE)
 
 const processedMessages = new Set();
 const userState = {};
-const MAX_RETRIES = 2;
 
 // ====== HELPERS ======
 async function isJidAlive(sock, jid) {
